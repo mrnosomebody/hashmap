@@ -85,7 +85,9 @@ public:
 };
 
 template<typename ValueType>
-class hash_map_const_iterator : hash_map_iterator<ValueType> {
+class hash_map_const_iterator {
+private:
+    ValueType *p;
 // Shouldn't give non const references on value
 public:
     using iterator_category = std::forward_iterator_tag;
@@ -94,20 +96,35 @@ public:
     using reference = const ValueType&;
     using pointer = const ValueType*;
 
-    hash_map_const_iterator() noexcept;
-    hash_map_const_iterator(const hash_map_const_iterator& other) noexcept;
-    hash_map_const_iterator(const hash_map_iterator<ValueType>& other) noexcept;
+    hash_map_const_iterator() noexcept = default;
+    hash_map_const_iterator(const hash_map_const_iterator& other) noexcept = default;
+    hash_map_const_iterator(const hash_map_iterator<ValueType>& other) noexcept {};
 
-    const reference operator*() const;
-    const pointer operator->() const;
+    const reference operator*() const {
+        return *p;
+    }
+    const pointer operator->() const{
+        return p;
+    }
 
     // prefix ++
-    hash_map_const_iterator& operator++();
+    hash_map_const_iterator& operator++(){
+        ++p;
+        return *this;
+    }
     // postfix ++
-    hash_map_const_iterator operator++(int);
+    hash_map_const_iterator operator++(int){
+        hash_map_const_iterator temp = *this;
+        p++;
+        return temp;
+    }
 
-    friend bool operator==(const hash_map_const_iterator<ValueType>&, const hash_map_const_iterator<ValueType>&);
-    friend bool operator!=(const hash_map_const_iterator<ValueType>&, const hash_map_const_iterator<ValueType>&);
+    bool operator==(const hash_map_iterator<ValueType>&other) {
+        return p==other.p;
+    }
+    bool operator!=(const hash_map_iterator<ValueType>&other) {
+        return p!=other.p;
+    }
 };
 
 template<typename K, typename V>
@@ -132,7 +149,7 @@ public:
 class hash_map
 {
 private:
-    double loadfactor, max_loadfactor;
+    double loadfactor, max_loadfactor = 0.7;
     int current_size,capacity;
     HashNode<K,T> **arr;
     HashNode<K,T> *deleted;
@@ -276,7 +293,7 @@ public:
     }
 
     const_iterator cbegin() const noexcept {
-        const_iterator iter;
+        const_iterator iter = arr;
         return iter;
     }
 
@@ -293,9 +310,14 @@ public:
      *  Returns a read-only (constant) iterator that points one past the last
      *  element in the %hash_map.
      */
-    const_iterator end() const noexcept;
+    const_iterator end() const noexcept {
+        return cend();
+    }
 
-    const_iterator cend() const noexcept;
+    const_iterator cend() const noexcept {
+        const_iterator iter = arr;
+        return iter + capacity;
+    }
     //@}
 
     // modifiers.
