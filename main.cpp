@@ -4,6 +4,8 @@
 #include <memory>
 #include <utility>
 #include <type_traits>
+
+
 using namespace std;
 
 namespace fefu
@@ -111,14 +113,15 @@ public:
 template<typename K, typename V>
 class HashNode
 {
-public:
     V value;
     K key;
-
+    HashNode *next;
+public:
     HashNode(K key, V value)
     {
         this->value = value;
         this->key = key;
+        this->next = nullptr;
     }
 };
 
@@ -130,7 +133,9 @@ class hash_map
 {
 private:
     double loadfactor, max_loadfactor;
-    int size,capacity;
+    int current_size,capacity;
+    HashNode<K,T> **arr;
+    HashNode<K,T> *deleted;
 public:
     using key_type = K;
     using mapped_type = T;
@@ -152,8 +157,12 @@ public:
      *  @param n  Minimal initial number of buckets.
      */
     explicit hash_map(size_type n) {
-
-
+        capacity = n;
+        allocator<T> allocator;
+        arr = allocator.allocate(n);
+        for(int i=0 ; i < capacity ; i++)
+            arr[i] = NULL;
+        deleted = allocator.allocate(1)(-1,-1);
     }
 
     /**
@@ -170,7 +179,9 @@ public:
     hash_map(InputIterator first, InputIterator last,size_type n = 0);
 
     /// Copy constructor.
-    hash_map(const hash_map&);
+    hash_map(const hash_map &other) {
+        this->arr = other.arr;
+    }
 
     /// Move constructor.
     hash_map(hash_map&&);
@@ -236,10 +247,14 @@ public:
     bool empty() const noexcept;
 
     ///  Returns the size of the %hash_map.
-    size_type size() const noexcept;
+    size_type size() const noexcept {
+        return current_size;
+    }
 
     ///  Returns the maximum size of the %hash_map.
-    size_type max_size() const noexcept;
+    size_type max_size() const noexcept {
+        return capacity;
+    }
 
     // iterators.
 
@@ -247,22 +262,31 @@ public:
      *  Returns a read/write iterator that points to the first element in the
      *  %hash_map.
      */
-    iterator begin() noexcept;
+    iterator begin() noexcept {
+        return arr;
+    }
 
     //@{
     /**
      *  Returns a read-only (constant) iterator that points to the first
      *  element in the %hash_map.
      */
-    const_iterator begin() const noexcept;
+    const_iterator begin() const noexcept {
+        return cbegin();
+    }
 
-    const_iterator cbegin() const noexcept;
+    const_iterator cbegin() const noexcept {
+        const_iterator iter;
+        return iter;
+    }
 
     /**
      *  Returns a read/write iterator that points one past the last element in
      *  the %hash_map.
      */
-    iterator end() noexcept;
+    iterator end() noexcept {
+        return arr+capacity;
+    }
 
     //@{
     /**
@@ -480,7 +504,19 @@ public:
 
     ///  Returns the hash functor object with which the %hash_map was
     ///  constructed.
-    Hash hash_function() const;
+    Hash hash_function(const char *key) const {
+        unsigned long int value = 0;
+        unsigned int i = 0;
+        unsigned int key_len = ;
+
+        for (; i < key_len; ++i) {
+            value = value * 37 + key[i];
+        }
+
+        value = value % capacity;
+
+        return value;
+    }
 
     ///  Returns the key comparison object with which the %hash_map was
     ///  constructed.
@@ -572,7 +608,7 @@ public:
 
     /// Returns the average number of elements per bucket.
     float load_factor() const noexcept {
-        return loadfactor;
+        return current_size/capacity;
     }
 
     /// Returns a positive number that the %hash_map tries to keep the
