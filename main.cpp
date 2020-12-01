@@ -527,17 +527,8 @@ public:
     ///  Returns the hash functor object with which the %hash_map was
     ///  constructed.
     Hash hash_function(const char *key) const {
-        unsigned long int value = 0;
-        unsigned int i = 0;
-        unsigned int key_len = ;
-
-        for (; i < key_len; ++i) {
-            value = value * 37 + key[i];
-        }
-
-        value = value % capacity;
-
-        return value;
+        size_t hash_value = Hash(key);
+        return hash_value;
     }
 
     ///  Returns the key comparison object with which the %hash_map was
