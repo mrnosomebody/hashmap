@@ -4,8 +4,16 @@
 #include <memory>
 #include <utility>
 #include <type_traits>
+#include <vector>
 
 using namespace std;
+
+enum status {
+    DELETED,
+    EMPTY,
+    FULL
+};
+
 
 template<typename T>
 class My_allocator {
@@ -36,16 +44,32 @@ public:
     }
 };
 
+template<typename K, typename T,
+        typename Hash = std::hash<K>,
+        typename Pred = std::equal_to<K>,
+        typename Alloc = My_allocator<std::pair<const K, T>>>
+class hash_map;
+
 template<typename ValueType>
 class hash_map_iterator {
 private:
     ValueType *p;
+    static int capacity;
+    vector<status> status;
+    int hash_index;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
     using difference_type = std::ptrdiff_t;
     using reference = ValueType &;
     using pointer = ValueType *;
+
+    template<typename K, typename T,
+            typename Hash,
+            typename Pred,
+            typename Alloc>
+    friend
+    class hash_map;
 
     hash_map_iterator(pointer p) noexcept: p(p) {}
 
@@ -63,15 +87,35 @@ public:
 
     // prefix ++
     hash_map_iterator &operator++() {
-        ++p;
-        return *this;
+        for (int i = 0; i < capacity; ++i) {
+            if (status[i] == FULL)
+                return p + i;
+        }
+        return p + capacity;
     }
 
     // postfix ++
     hash_map_iterator operator++(int) {
         hash_map_iterator temp = *this;
-        p++;
+        for (int i = 0; i < capacity; ++i) {
+            if (status[i] == FULL)
+                this->p = p + i;
+        }
+        if (this->p == temp.p)
+            this->p = p + capacity;
         return temp;
+    }
+
+    hash_map_iterator next_free_space() {
+        int i = 0;
+        while (status[hash_index] == FULL) {
+            ++hash_index;
+            hash_index %= capacity;
+            ++i;
+            if (i == capacity - 1)
+                return p + capacity;
+        }
+        return p + hash_index;
     }
 
     bool operator==(const hash_map_iterator<ValueType> &other) {
@@ -87,13 +131,21 @@ template<typename ValueType>
 class hash_map_const_iterator {
 private:
     ValueType *p;
-// Shouldn't give non const references on value
+    static int capacity;
+    vector<status> status;
+    int hash_index;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
     using difference_type = std::ptrdiff_t;
     using reference = const ValueType &;
     using pointer = const ValueType *;
+    template<typename K, typename T,
+            typename Hash,
+            typename Pred,
+            typename Alloc>
+    friend
+    class hash_map;
 
     hash_map_const_iterator() noexcept = default;
 
@@ -111,14 +163,22 @@ public:
 
     // prefix ++
     hash_map_const_iterator &operator++() {
-        ++p;
-        return *this;
+        for (int i = 0; i < capacity; ++i) {
+            if (status[i] == FULL)
+                return p + i;
+        }
+        return p + capacity;
     }
 
     // postfix ++
     hash_map_const_iterator operator++(int) {
         hash_map_const_iterator temp = *this;
-        p++;
+        for (int i = 0; i < capacity; ++i) {
+            if (status[i] == FULL)
+                this->p = p + i;
+        }
+        if (this->p == temp.p)
+            this->p = p + capacity;
         return temp;
     }
 
@@ -131,35 +191,10 @@ public:
     }
 };
 
-enum status {
-    DELETED,
-    EMPTY,
-    FULL
-};
 
-template<typename K, typename V>
-class HashNode {
-    V value;
-    K key;
-    HashNode *next;
-public:
-    HashNode(K key, V value) {
-        this->value = value;
-        this->key = key;
-        this->next = nullptr;
-    }
-};
-
-template<typename K, typename T,
-        typename Hash = std::hash<K>,
-        typename Pred = std::equal_to<K>,
-        typename Alloc = My_allocator<std::pair<const K, T>>>
+template<typename K, typename T, typename Hash, typename Pred, typename Alloc>
 class hash_map {
 private:
-    double loadfactor, max_loadfactor = 0.5;
-    int current_size, capacity;
-    HashNode<K, T> arr[];
-public:
     using key_type = K;
     using mapped_type = T;
     using hasher = Hash;
@@ -172,6 +207,15 @@ public:
     using const_iterator = hash_map_const_iterator<value_type>;
     using size_type = std::size_t;
 
+    float loadfactor = 0, max_loadfactor = 0.5;
+    size_type current_size = 0, capacity = 0;
+    value_type *arr;
+    vector<status> status_ptr;
+    Alloc allocator_;
+    Hash hasher_;
+public:
+
+
     /// Default constructor.
     hash_map() = default;
 
@@ -182,26 +226,37 @@ public:
     explicit hash_map(size_type n) {
         capacity = n;
         if (n != 0) {
-            My_allocator<T> allocator;
-            arr = allocator.allocate(n);
+            arr = allocator_.allocate(n);
+            status_ptr.resize(n);
             for (int i = 0; i < capacity; ++i) {
-                arr[i] = EMPTY;
+                status_ptr[i] = EMPTY;
             }
         }
+    }
+
+    ~hash_map() {
+        for (int i = 0; i < capacity; ++i) {
+            if (status_ptr[i] == FULL)
+                arr[i].~value_type();
+        }
+        allocator_.deallocate(arr,capacity);
+        //vector<status>().swap(status_ptr);
+        status_ptr.clear();
     }
 
     template<typename InputIterator>
     hash_map(InputIterator first, InputIterator last, size_type n = 0) : hash_map(n) {
         for (auto it = first; it < last; ++it) {
-            this->arr.insert(it);
+            insert(*it);
         }
+
     }
 
-    //если вставлять только валидные элементы то в копии во время вставки вызовется рехеш
+
     /// Copy constructor.
-    hash_map(const hash_map &other) : hash_map(capacity) {
+    hash_map(const hash_map &other) : hash_map(other.capacity) {
         for (auto it = arr; it < capacity; ++it) {
-            other.arr.insert(*it);
+            insert(*it);
         }
     }
 
@@ -214,13 +269,13 @@ public:
         std::swap(other.current_size, current_size);
     }
 
-    explicit hash_map(const allocator_type &a) {
-        arr = a.allocate(1);
+    explicit hash_map(const allocator_type &a){
+        allocator_ = a;
     }
 
     hash_map(std::initializer_list<value_type> l, size_type n = 0) : hash_map(n) {
         for (auto it = l.begin(); it != l.end(); ++it) {
-            this->arr.insert(it);
+            insert(*it);
         }
     }
 
@@ -240,32 +295,16 @@ public:
         std::swap(other.current_size, current_size);
     }
 
-    /**
-     *  @brief  %hash_map list assignment operator.
-     *  @param  l  An initializer_list.
-     *
-     *  This function fills an %hash_map with copies of the elements in
-     *  the initializer list @a l.
-     *
-     *  Note that the assignment completely changes the %hash_map and
-     *  that the resulting %hash_map's size is the same as the number
-     *  of elements assigned.
-     */
     hash_map &operator=(std::initializer_list<value_type> l) {
         for (auto it = l.begin(); it != l.end(); ++it) {
             this->arr.insert(it);
         }
     }
 
-    ///  Returns the allocator object used by the %hash_map.
     allocator_type get_allocator() const noexcept {
-        My_allocator<T> alloc;
-        return alloc;
+        return allocator_;
     }
 
-    // size and capacity:
-
-    ///  Returns true if the %hash_map is empty.
     bool empty() const noexcept {
         for (auto i :arr) {
             if (arr[i] != EMPTY)
@@ -274,30 +313,26 @@ public:
         return true;
     }
 
-    ///  Returns the size of the %hash_map.
     size_type size() const noexcept {
         return current_size;
     }
 
-    ///  Returns the maximum size of the %hash_map.
     size_type max_size() const noexcept {
         return capacity;
     }
-    // iterators.
 
-    /**
-     *  Returns a read/write iterator that points to the first element in the
-     *  %hash_map.
-     */
     iterator begin() noexcept {
-        return arr;
+        iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        if (status_ptr[0] != FULL) {
+            it.operator++();
+            return it;
+        } else
+            return arr;
     }
 
-    //@{
-    /**
-     *  Returns a read-only (constant) iterator that points to the first
-     *  element in the %hash_map.
-     */
     const_iterator begin() const noexcept {
         return cbegin();
     }
@@ -307,19 +342,10 @@ public:
         return it;
     }
 
-    /**
-     *  Returns a read/write iterator that points one past the last element in
-     *  the %hash_map.
-     */
     iterator end() noexcept {
         return arr + capacity;
     }
 
-    //@{
-    /**
-     *  Returns a read-only (constant) iterator that points one past the last
-     *  element in the %hash_map.
-     */
     const_iterator end() const noexcept {
         return cend();
     }
@@ -328,74 +354,67 @@ public:
         const_iterator it = arr + capacity;
         return it;
     }
-    //@}
-    /**
-     *  @brief A template function that attempts to insert a range of
-     *  elements.
-     *  @param  first  Iterator pointing to the start of the range to be
-     *                   inserted.
-     *  @param  last  Iterator pointing to the end of the range.
-     *
-     *  Complexity similar to that of the range constructor.
-     */
-    unsigned int hash_(const string key) {
-        unsigned long int value = 0;
-        unsigned int i = 0;
-        unsigned int key_len = key.length();
 
-        // do several rounds of multiplication
-        for (; i < key_len; ++i) {
-            value = value * 37 + key[i];
-        }
-
-        // make sure value is 0 <= value < TABLE_SIZE
-        value = value % capacity;
-
-        return value;
-    }
-    unsigned int hash_(const int key) {
-        return key % capacity;
-    }
-    void insert(K key, T value) {
+    std::pair<iterator, bool> insert(K key, T value) {
         if (loadfactor >= max_loadfactor)
-            rehash(capacity*2);
+            rehash(capacity * 2);
+        bool state;
+        int hash_index = hasher_(key) % capacity;
+        iterator it;
 
-        HashNode<K,T> temp = pair<K,T>(key,value);
-        int hash_index = hash_(key);
+        it.hash_index = hash_index;
+        it.p = arr;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.next_free_space();
 
-        while (arr[hash_index] != EMPTY or arr[hash_index] != DELETED
-        and hash_index < capacity) {
-            ++hash_index;
+        if (it == arr + capacity) {
+            state = false;
+            return make_pair(arr + capacity, state);
+        } else {
+            state = true;
+            current_size++;
+            loadfactor = static_cast<float>(current_size) / capacity;
+            status_ptr[hash_index] = FULL;
+            new(arr + hash_index) value_type(key, value);
+            arr[hash_index] = make_pair(key,value);
+            return make_pair(arr + hash_index, state);
+
         }
-        if (arr[capacity-1] == FULL)
-            rehash(capacity*2);
-
-        arr[hash_index] = temp;
-        arr[hash_index] = FULL;
-        ++current_size;
     }
 
-    void erase (K key) {
-        if (this->find(key) != this->arr.end()) {
-            arr[this->find(key)] = nullptr;
-            arr[this->find(key)] = DELETED;
-        }
-    }
-
-    iterator find (K key) {
-        int hash_index = hash_(key);
-        if (arr[hash_index].key == key)
-            return arr[hash_index];
+    void erase(K key) {
+        int hash_index = hasher_(key) % capacity;
+        if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
+            *(arr + hash_index).~value_type();
         else {
-            ++hash_index;
-            for (iterator it = arr[hash_index]; it < capacity; ++it){
-                if (arr[hash_index].key == key)
-                    return arr[hash_index];
+            iterator it = find(key);
+            if (it == arr + capacity)
+                cout << "There is no such element in the map" << endl;
+            *it.~value_type();
+        }
+
+    }
+
+    iterator find(K key) {
+        int hash_index = hasher_(key) % capacity;
+        if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
+            return arr + hash_index;
+        else {
+            int i =0;
+            while (status_ptr[hash_index] != FULL and arr[hash_index].first != key and i < capacity){
+                ++hash_index;
+                hash_index %= capacity;
+                ++i;
+                if (i == capacity - 1){
+                    return arr + capacity;
+                }
             }
-            return arr.end();
+            return arr + hash_index;
         }
     }
 
 
-    void rehash(size_type n){}
+    void rehash(size_type n) {}
 };
+
