@@ -140,6 +140,7 @@ public:
     using difference_type = std::ptrdiff_t;
     using reference = const ValueType &;
     using pointer = const ValueType *;
+
     template<typename K, typename T,
             typename Hash,
             typename Pred,
@@ -239,7 +240,7 @@ public:
             if (status_ptr[i] == FULL)
                 arr[i].~value_type();
         }
-        allocator_.deallocate(arr,capacity);
+        allocator_.deallocate(arr, capacity);
         //vector<status>().swap(status_ptr);
         status_ptr.clear();
     }
@@ -269,7 +270,7 @@ public:
         std::swap(other.current_size, current_size);
     }
 
-    explicit hash_map(const allocator_type &a) : hash_map(), allocator_(a){}
+    explicit hash_map(const allocator_type &a) : hash_map(), allocator_(a) {}
 
     hash_map(std::initializer_list<value_type> l, size_type n = 0) : hash_map(n) {
         for (auto it = l.begin(); it != l.end(); ++it) {
@@ -279,18 +280,14 @@ public:
 
     /// Copy assignment operator.
     hash_map &operator=(const hash_map &other) {
-        for (int i = 0; i < capacity; ++i) {
-            other.arr[i] = arr[i];
-        }
+        hash_map(other).swap(*this);
+        return *this;
     }
 
     /// Move assignment operator.
     hash_map &operator=(hash_map &&other) {
-        std::swap(other.arr, arr);
-        std::swap(other.capacity, capacity);
-        std::swap(other.loadfactor, loadfactor);
-        std::swap(other.max_loadfactor, max_loadfactor);
-        std::swap(other.current_size, current_size);
+        hash_map(std::move(other)).swap(*this);
+        return *this;
     }
 
     hash_map &operator=(std::initializer_list<value_type> l) {
@@ -319,6 +316,16 @@ public:
         return capacity;
     }
 
+    void swap(hash_map &x) {
+        std::swap(x.arr, arr);
+        std::swap(x.capacity, capacity);
+        std::swap(x.loadfactor, loadfactor);
+        std::swap(x.max_loadfactor, max_loadfactor);
+        std::swap(x.current_size, current_size);
+        std::swap(x.hasher_, hasher_);
+        std::swap(x.allocator_, allocator_);
+    }
+
     iterator begin() noexcept {
         iterator it;
         it.capacity = capacity;
@@ -336,8 +343,15 @@ public:
     }
 
     const_iterator cbegin() const noexcept {
-        const_iterator it = arr;
-        return it;
+        const_iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        if (status_ptr[0] != FULL) {
+            it.operator++();
+            return it;
+        } else
+            return arr;
     }
 
     iterator end() noexcept {
@@ -375,7 +389,7 @@ public:
             loadfactor = static_cast<float>(current_size) / capacity;
             status_ptr[hash_index] = FULL;
             new(arr + hash_index) value_type(key, value);
-            arr[hash_index] = make_pair(key,value);
+            //arr[hash_index] = make_pair(key, value);
             return make_pair(arr + hash_index, state);
 
         }
@@ -383,13 +397,23 @@ public:
 
     void erase(K key) {
         int hash_index = hasher_(key) % capacity;
-        if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
+        if (status_ptr[hash_index] == FULL and arr[hash_index].first == key) {
             *(arr + hash_index).~value_type();
-        else {
+            current_size--;
+            loadfactor = static_cast<float>(current_size) / capacity;
+            status_ptr[hash_index] = DELETED;
+        } else {
             iterator it = find(key);
-            if (it == arr + capacity)
+            if (it == arr + capacity) {
                 cout << "There is no such element in the map" << endl;
-            *it.~value_type();
+                return;
+            } else {
+                *it.~value_type();
+                current_size--;
+                loadfactor = static_cast<float>(current_size) / capacity;
+                status_ptr[hash_index] = DELETED;
+            }
+
         }
 
     }
@@ -399,12 +423,13 @@ public:
         if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
             return arr + hash_index;
         else {
-            int i =0;
-            while (status_ptr[hash_index] != FULL and arr[hash_index].first != key and i < capacity){
+            int i = 0;
+            while (status_ptr[hash_index] != FULL or status_ptr[hash_index] != EMPTY and
+                   arr[hash_index].first != key and i < capacity) {
                 ++hash_index;
                 hash_index %= capacity;
                 ++i;
-                if (i == capacity - 1){
+                if (i == capacity - 1) {
                     return arr + capacity;
                 }
             }
@@ -413,6 +438,53 @@ public:
     }
 
 
-    void rehash(size_type n) {}
+    void rehash(size_type n) {
+        if (capacity == 0)
+            capacity = 3;
+
+        value_type *temp_arr;
+        vector<status> temp_status;
+        temp_arr = allocator_.allocate(n);
+        temp_status.resize(n);
+        capacity = n;
+        loadfactor = static_cast<float>(current_size) / capacity;
+
+        iterator it;
+        it.p = arr;
+        it.capacity = capacity;
+        it.status = status_ptr;
+
+        for (int i = 0; i < capacity; ++i) {
+            temp_status[i] = EMPTY;
+        }
+
+        if (status_ptr[0] != FULL)
+            it.operator++();
+        for (int i = 0; i < capacity; ++i) {
+            new(temp_arr + i) value_type(arr[i].first, arr[i].second);
+            temp_status[i] = FULL;
+            //temp_arr[i] = *it;
+            if (it == arr + capacity)
+                break;
+        }
+        arr = allocator_.allocate(n);
+        status_ptr.resize(n);
+        for (int i = 0; i < capacity; ++i) {
+            status_ptr[i] = EMPTY;
+        }
+        
+        for ( int i = 0; status_ptr[i] == FULL; i++) {
+            new(arr + i) value_type(temp_arr[i].first, temp_arr[i].second);
+            temp_arr[i].~value_type();
+            status_ptr[i] = FULL;
+        }
+        allocator_.deallocate(temp_arr,n);
+        temp_status.clear();
+
+    }
 };
 
+//int main() {
+//    hash_map<string, int> object(5);
+//    object.insert("name", 1);
+//}
