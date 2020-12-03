@@ -270,7 +270,9 @@ public:
         std::swap(other.current_size, current_size);
     }
 
-    explicit hash_map(const allocator_type &a) : hash_map(), allocator_(a) {}
+    explicit hash_map(const allocator_type &a) {
+        allocator_ = a;
+    }
 
     hash_map(std::initializer_list<value_type> l, size_type n = 0) : hash_map(n) {
         for (auto it = l.begin(); it != l.end(); ++it) {
