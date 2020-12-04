@@ -5,6 +5,7 @@
 #include <utility>
 #include <type_traits>
 #include <vector>
+#include <limits>
 
 using namespace std;
 
@@ -54,9 +55,9 @@ template<typename ValueType>
 class hash_map_iterator {
 private:
     ValueType *p;
-    static int capacity;
+    int capacity = 0;
     vector<status> status;
-    int hash_index;
+    int hash_index = 0;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
@@ -71,39 +72,45 @@ public:
     friend
     class hash_map;
 
-    hash_map_iterator(pointer p) noexcept: p(p) {}
+    hash_map_iterator() = default;
+
+   hash_map_iterator(pointer p, int capacity,vector<ValueType> status, int hash_index):
+    p(p), capacity(capacity),
+    status(status),
+    hash_index(hash_index) {}
 
     hash_map_iterator(const hash_map_iterator &other) noexcept {
         this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status = other.status;
     }
 
     reference operator*() const {
-        return *p;
+        return *(p + hash_index);
     }
 
     pointer operator->() const {
-        return p;
+        return p + hash_index;
     }
 
     // prefix ++
     hash_map_iterator &operator++() {
         for (int i = 0; i < capacity; ++i) {
-            if (status[i] == FULL)
-                return p + i;
+            if (status[i] == FULL) {
+                hash_index = i;
+                return *this;
+            }
         }
-        return p + capacity;
+        hash_index = capacity;
+        return *this;
     }
 
     // postfix ++
     hash_map_iterator operator++(int) {
-        hash_map_iterator temp = *this;
-        for (int i = 0; i < capacity; ++i) {
-            if (status[i] == FULL)
-                this->p = p + i;
-        }
-        if (this->p == temp.p)
-            this->p = p + capacity;
-        return temp;
+        auto tmp = hash_map_iterator(*this);
+        operator++();
+        return tmp;
     }
 
     hash_map_iterator next_free_space() {
@@ -112,18 +119,21 @@ public:
             ++hash_index;
             hash_index %= capacity;
             ++i;
-            if (i == capacity - 1)
-                return p + capacity;
+            if (i == capacity - 1) {
+                hash_index = capacity;
+                return *this;
+            }
         }
-        return p + hash_index;
+        hash_index = i;
+        return *this;
     }
 
-    bool operator==(const hash_map_iterator<ValueType> &other) {
-        return p == other.p;
+    friend bool operator==(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return lhs.hash_index == rhs.hash_index;
     }
 
-    bool operator!=(const hash_map_iterator<ValueType> &other) {
-        return p != other.p;
+    friend bool operator!=(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return lhs.hash_index != rhs.hash_index;
     }
 };
 
@@ -131,9 +141,9 @@ template<typename ValueType>
 class hash_map_const_iterator {
 private:
     ValueType *p;
-    static int capacity;
+    int capacity = 0;
     vector<status> status;
-    int hash_index;
+    int hash_index = 0;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
@@ -150,45 +160,53 @@ public:
 
     hash_map_const_iterator() noexcept = default;
 
-    hash_map_const_iterator(const hash_map_const_iterator &other) noexcept = default;
+    hash_map_const_iterator(const hash_map_const_iterator &other) noexcept {
+        this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status = other.status;
+    }
 
-    hash_map_const_iterator(const hash_map_iterator<ValueType> &other) noexcept {};
+    hash_map_const_iterator(const hash_map_iterator<ValueType> &other) noexcept {
+        this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status = other.status;
+    };
 
     const reference operator*() const {
-        return *p;
+        return *(p + hash_index);
     }
 
     const pointer operator->() const {
-        return p;
+        return (p + hash_index);
     }
 
     // prefix ++
     hash_map_const_iterator &operator++() {
         for (int i = 0; i < capacity; ++i) {
-            if (status[i] == FULL)
-                return p + i;
+            if (status[i] == FULL) {
+                hash_index = i;
+                return *this;
+            }
         }
-        return p + capacity;
+        hash_index = capacity;
+        return *this;
     }
 
     // postfix ++
     hash_map_const_iterator operator++(int) {
-        hash_map_const_iterator temp = *this;
-        for (int i = 0; i < capacity; ++i) {
-            if (status[i] == FULL)
-                this->p = p + i;
-        }
-        if (this->p == temp.p)
-            this->p = p + capacity;
-        return temp;
+        auto tmp = hash_map_const_iterator(*this);
+        operator++();
+        return tmp;
     }
 
-    bool operator==(const hash_map_iterator<ValueType> &other) {
-        return p == other.p;
+    friend bool operator==(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return lhs == rhs;
     }
 
-    bool operator!=(const hash_map_iterator<ValueType> &other) {
-        return p != other.p;
+    friend bool operator!=(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return lhs != rhs;
     }
 };
 
@@ -212,11 +230,10 @@ private:
     size_type current_size = 0, capacity = 0;
     value_type *arr;
     vector<status> status_ptr;
-    Alloc allocator_;
-    Hash hasher_;
+    allocator_type allocator_ ;
+    hasher hasher_;
+    key_equal equal_;
 public:
-
-
     /// Default constructor.
     hash_map() = default;
 
@@ -262,12 +279,8 @@ public:
     }
 
     /// Move constructor.
-    hash_map(hash_map &&other) {
-        std::swap(other.arr, arr);
-        std::swap(other.capacity, capacity);
-        std::swap(other.loadfactor, loadfactor);
-        std::swap(other.max_loadfactor, max_loadfactor);
-        std::swap(other.current_size, current_size);
+    hash_map(hash_map &&other) noexcept {
+        swap(other);
     }
 
     explicit hash_map(const allocator_type &a) {
@@ -287,14 +300,14 @@ public:
     }
 
     /// Move assignment operator.
-    hash_map &operator=(hash_map &&other) {
-        hash_map(std::move(other)).swap(*this);
+    hash_map &operator=(hash_map &&other) noexcept {
+        swap(other);
         return *this;
     }
 
     hash_map &operator=(std::initializer_list<value_type> l) {
         for (auto it = l.begin(); it != l.end(); ++it) {
-            this->arr.insert(it);
+            insert(*it);
         }
     }
 
@@ -303,11 +316,7 @@ public:
     }
 
     bool empty() const noexcept {
-        for (auto i :arr) {
-            if (arr[i] != EMPTY)
-                return false;
-        }
-        return true;
+        return current_size == 0;
     }
 
     size_type size() const noexcept {
@@ -315,17 +324,19 @@ public:
     }
 
     size_type max_size() const noexcept {
-        return capacity;
+        return std::numeric_limits<size_type>::max();
     }
 
     void swap(hash_map &x) {
-        std::swap(x.arr, arr);
-        std::swap(x.capacity, capacity);
-        std::swap(x.loadfactor, loadfactor);
-        std::swap(x.max_loadfactor, max_loadfactor);
-        std::swap(x.current_size, current_size);
-        std::swap(x.hasher_, hasher_);
-        std::swap(x.allocator_, allocator_);
+        std::swap(arr, x.arr);
+        std::swap(allocator_, x.allocator_);
+        std::swap(capacity, x.capacity);
+        std::swap(loadfactor, x.loadfactor);
+        std::swap(max_loadfactor, x.max_loadfactor);
+        std::swap(hasher_, x.hasher_);
+        std::swap(status_ptr, x.status_ptr);
+        std::swap(current_size, x.current_size);
+        std::swap(equal_, x.equal_);
     }
 
     iterator begin() noexcept {
@@ -336,8 +347,10 @@ public:
         if (status_ptr[0] != FULL) {
             it.operator++();
             return it;
-        } else
-            return arr;
+        } else {
+            it.hash_index = 0;
+            return it;
+        }
     }
 
     const_iterator begin() const noexcept {
@@ -352,12 +365,19 @@ public:
         if (status_ptr[0] != FULL) {
             it.operator++();
             return it;
-        } else
-            return arr;
+        } else {
+            it.hash_index = 0;
+            return it;
+        }
     }
 
     iterator end() noexcept {
-        return arr + capacity;
+        iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        it.hash_index = capacity;
+        return it;
     }
 
     const_iterator end() const noexcept {
@@ -365,7 +385,11 @@ public:
     }
 
     const_iterator cend() const noexcept {
-        const_iterator it = arr + capacity;
+        const_iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        it.hash_index = capacity;
         return it;
     }
 
@@ -375,25 +399,22 @@ public:
         bool state;
         int hash_index = hasher_(key) % capacity;
         iterator it;
-
         it.hash_index = hash_index;
         it.p = arr;
         it.capacity = capacity;
         it.status = status_ptr;
-        it.next_free_space();
+        it = it.next_free_space();
 
-        if (it == arr + capacity) {
+        if (it == end()) {
             state = false;
-            return make_pair(arr + capacity, state);
+            return pair<iterator, bool>(it, state);
         } else {
             state = true;
             current_size++;
             loadfactor = static_cast<float>(current_size) / capacity;
             status_ptr[hash_index] = FULL;
             new(arr + hash_index) value_type(key, value);
-            //arr[hash_index] = make_pair(key, value);
-            return make_pair(arr + hash_index, state);
-
+            return pair<iterator, bool>(it,state);
         }
     }
 
@@ -423,7 +444,7 @@ public:
     iterator find(K key) {
         int hash_index = hasher_(key) % capacity;
         if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
-            return arr + hash_index;
+            return hash_map_iterator<value_type>(arr,capacity,status_ptr,hash_index);
         else {
             int i = 0;
             while (status_ptr[hash_index] != FULL or status_ptr[hash_index] != EMPTY and
@@ -432,10 +453,10 @@ public:
                 hash_index %= capacity;
                 ++i;
                 if (i == capacity - 1) {
-                    return arr + capacity;
+                    return end();
                 }
             }
-            return arr + hash_index;
+            return hash_map_iterator<value_type>(arr,capacity,status_ptr,hash_index);
         }
     }
 
@@ -444,49 +465,54 @@ public:
         if (capacity == 0)
             capacity = 3;
 
-        value_type *temp_arr;
-        vector<status> temp_status;
-        temp_arr = allocator_.allocate(n);
-        temp_status.resize(n);
-        capacity = n;
-        loadfactor = static_cast<float>(current_size) / capacity;
-
-        iterator it;
-        it.p = arr;
-        it.capacity = capacity;
-        it.status = status_ptr;
-
-        for (int i = 0; i < capacity; ++i) {
-            temp_status[i] = EMPTY;
-        }
-
-        if (status_ptr[0] != FULL)
-            it.operator++();
-        for (int i = 0; i < capacity; ++i) {
-            new(temp_arr + i) value_type(arr[i].first, arr[i].second);
-            temp_status[i] = FULL;
-            //temp_arr[i] = *it;
-            if (it == arr + capacity)
-                break;
-        }
-        arr = allocator_.allocate(n);
-        status_ptr.resize(n);
-        for (int i = 0; i < capacity; ++i) {
-            status_ptr[i] = EMPTY;
-        }
-        
-        for ( int i = 0; status_ptr[i] == FULL; i++) {
-            new(arr + i) value_type(temp_arr[i].first, temp_arr[i].second);
-            temp_arr[i].~value_type();
-            status_ptr[i] = FULL;
-        }
-        allocator_.deallocate(temp_arr,n);
-        temp_status.clear();
+//        value_type *temp_arr;
+//        vector<status> temp_status;
+//        temp_arr = allocator_.allocate(n);
+//        temp_status.resize(n);
+//        capacity = n;
+//        loadfactor = static_cast<float>(current_size) / capacity;
+//
+//        iterator it;
+//        it.p = arr;
+//        it.capacity = capacity;
+//        it.status = status_ptr;
+//
+//        for (int i = 0; i < capacity; ++i) {
+//            temp_status[i] = EMPTY;
+//        }
+//
+//        if (status_ptr[0] != FULL){
+//
+//        }
+//
+//            it.operator++();
+//
+//        for (int i = 0; i < capacity; ++i) {
+//            new(temp_arr + i) value_type(arr[i].first, arr[i].second);
+//            temp_status[i] = FULL;
+//            if (it. == arr + capacity)
+//                break;
+//        }
+//        arr = allocator_.allocate(n);
+//        status_ptr.resize(n);
+//        for (int i = 0; i < capacity; ++i) {
+//            status_ptr[i] = EMPTY;
+//        }
+//
+//        for (int i = 0; status_ptr[i] == FULL; i++) {
+//            new(arr + i) value_type(temp_arr[i].first, temp_arr[i].second);
+//            temp_arr[i].~value_type();
+//            status_ptr[i] = FULL;
+//        }
+//        allocator_.deallocate(temp_arr, n);
+//        temp_status.clear();
 
     }
 };
 
-//int main() {
-//    hash_map<string, int> object(5);
-//    object.insert("name", 1);
-//}
+int main() {
+    hash_map<string, int> object(5);
+    object.insert("name121", 1);
+    object.find("name121");
+
+}
