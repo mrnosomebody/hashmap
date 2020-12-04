@@ -56,7 +56,7 @@ class hash_map_iterator {
 private:
     ValueType *p;
     int capacity = 0;
-    vector<status> status;
+    vector<status> status_;
     int hash_index = 0;
 public:
     using iterator_category = std::forward_iterator_tag;
@@ -74,16 +74,16 @@ public:
 
     hash_map_iterator() = default;
 
-   hash_map_iterator(pointer p, int capacity,vector<ValueType> status, int hash_index):
+   hash_map_iterator(pointer p, int capacity,vector<status> status_, int hash_index):
     p(p), capacity(capacity),
-    status(status),
+    status_(status_),
     hash_index(hash_index) {}
 
     hash_map_iterator(const hash_map_iterator &other) noexcept {
         this->p = other.p;
         this->capacity = other.capacity;
         this->hash_index = other.hash_index;
-        this->status = other.status;
+        this->status_ = other.status_;
     }
 
     reference operator*() const {
@@ -97,7 +97,7 @@ public:
     // prefix ++
     hash_map_iterator &operator++() {
         for (int i = 0; i < capacity; ++i) {
-            if (status[i] == FULL) {
+            if (status_[i] == FULL) {
                 hash_index = i;
                 return *this;
             }
@@ -115,7 +115,7 @@ public:
 
     hash_map_iterator next_free_space() {
         int i = 0;
-        while (status[hash_index] == FULL) {
+        while (status_[hash_index] == FULL) {
             ++hash_index;
             hash_index %= capacity;
             ++i;
@@ -374,7 +374,7 @@ public:
     iterator end() noexcept {
         iterator it;
         it.capacity = capacity;
-        it.status = status_ptr;
+        it.status_ = status_ptr;
         it.p = arr;
         it.hash_index = capacity;
         return it;
@@ -402,10 +402,11 @@ public:
         it.hash_index = hash_index;
         it.p = arr;
         it.capacity = capacity;
-        it.status = status_ptr;
+        it.status_ = status_ptr;
         it = it.next_free_space();
 
         if (it == end()) {
+            it = end();
             state = false;
             return pair<iterator, bool>(it, state);
         } else {
@@ -414,24 +415,24 @@ public:
             loadfactor = static_cast<float>(current_size) / capacity;
             status_ptr[hash_index] = FULL;
             new(arr + hash_index) value_type(key, value);
-            return pair<iterator, bool>(it,state);
+            return pair<iterator, bool>(hash_map_iterator<value_type>(arr,capacity,status_ptr,hash_index),state);
         }
     }
 
     void erase(K key) {
         int hash_index = hasher_(key) % capacity;
         if (status_ptr[hash_index] == FULL and arr[hash_index].first == key) {
-            *(arr + hash_index).~value_type();
+            (arr + hash_index)->~value_type();
             current_size--;
             loadfactor = static_cast<float>(current_size) / capacity;
             status_ptr[hash_index] = DELETED;
         } else {
             iterator it = find(key);
-            if (it == arr + capacity) {
+            if (it.operator->() == arr + capacity) {
                 cout << "There is no such element in the map" << endl;
                 return;
             } else {
-                *it.~value_type();
+                (arr + it.hash_index)->~value_type();
                 current_size--;
                 loadfactor = static_cast<float>(current_size) / capacity;
                 status_ptr[hash_index] = DELETED;
@@ -461,58 +462,61 @@ public:
     }
 
 
-    void rehash(size_type n) {
-        if (capacity == 0)
-            capacity = 3;
+//     void rehash(size_type n) {
+//         if (capacity == 0)
+//             capacity = 3;
 
-//        value_type *temp_arr;
-//        vector<status> temp_status;
-//        temp_arr = allocator_.allocate(n);
-//        temp_status.resize(n);
-//        capacity = n;
-//        loadfactor = static_cast<float>(current_size) / capacity;
-//
-//        iterator it;
-//        it.p = arr;
-//        it.capacity = capacity;
-//        it.status = status_ptr;
-//
-//        for (int i = 0; i < capacity; ++i) {
-//            temp_status[i] = EMPTY;
-//        }
-//
-//        if (status_ptr[0] != FULL){
-//
-//        }
-//
-//            it.operator++();
-//
-//        for (int i = 0; i < capacity; ++i) {
-//            new(temp_arr + i) value_type(arr[i].first, arr[i].second);
-//            temp_status[i] = FULL;
-//            if (it. == arr + capacity)
-//                break;
-//        }
-//        arr = allocator_.allocate(n);
-//        status_ptr.resize(n);
-//        for (int i = 0; i < capacity; ++i) {
-//            status_ptr[i] = EMPTY;
-//        }
-//
-//        for (int i = 0; status_ptr[i] == FULL; i++) {
-//            new(arr + i) value_type(temp_arr[i].first, temp_arr[i].second);
-//            temp_arr[i].~value_type();
-//            status_ptr[i] = FULL;
-//        }
-//        allocator_.deallocate(temp_arr, n);
-//        temp_status.clear();
+//         value_type *temp_arr;
+//         vector<status> temp_status;
+//         temp_arr = allocator_.allocate(n);
+//         temp_status.resize(n);
+//         capacity = n;
+//         loadfactor = static_cast<float>(current_size) / capacity;
 
-    }
+//         iterator it;
+//         it.p = arr;
+//         it.capacity = capacity;
+//         it.status_ = status_ptr;
+
+//         for (int i = 0; i < capacity; ++i) {
+//             temp_status[i] = EMPTY;
+//         }
+
+//         if (status_ptr[0] != FULL){
+
+//         }
+
+//             it.operator++();
+
+//         for (int i = 0; i < capacity; ++i) {
+//             new(temp_arr + i) value_type(arr[i].first, arr[i].second);
+//             temp_status[i] = FULL;
+//             if (it. == arr + capacity)
+//                 break;
+//         }
+//         arr = allocator_.allocate(n);
+//         status_ptr.resize(n);
+//         for (int i = 0; i < capacity; ++i) {
+//             status_ptr[i] = EMPTY;
+//         }
+
+//         for (int i = 0; status_ptr[i] == FULL; i++) {
+//             new(arr + i) value_type(temp_arr[i].first, temp_arr[i].second);
+//             temp_arr[i].~value_type();
+//             status_ptr[i] = FULL;
+//         }
+//         allocator_.deallocate(temp_arr, n);
+//         temp_status.clear();
+
+//     }
 };
 
 int main() {
     hash_map<string, int> object(5);
     object.insert("name121", 1);
-    object.find("name121");
+    cout<<object.find("name121")->second<<endl;
+    object.erase("name121");
+    cout<<object.find("name121")->second<<endl;
+    object.erase("name121");
 
 }
