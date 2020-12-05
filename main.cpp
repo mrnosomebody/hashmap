@@ -4,35 +4,42 @@
 #include <memory>
 #include <utility>
 #include <type_traits>
+#include <vector>
+#include <limits>
+#include <cmath>
 
 
 using namespace std;
 
-namespace fefu
-{
+enum status {
+    DELETED,
+    EMPTY,
+    FULL
+};
+
 
 template<typename T>
-class allocator {
+class My_allocator {
 public:
     using size_type = std::size_t;
     using difference_type = std::ptrdiff_t;
-    using pointer = T*;
-    using const_pointer = const T*;
+    using pointer = T *;
+    using const_pointer = const T *;
     using reference = typename std::add_lvalue_reference<T>::type;
     using const_reference = typename std::add_lvalue_reference<const T>::type;
     using value_type = T;
 
-    allocator() noexcept = default;
+    My_allocator() noexcept = default;
 
-    allocator(const allocator&) noexcept = default;
+    My_allocator(const My_allocator &) noexcept = default;
 
-    template <class U>
-    explicit allocator(const allocator<U>&) noexcept {}
+    template<class U>
+    explicit My_allocator(const My_allocator<U> &) noexcept {}
 
-    ~allocator() = default;
+    ~My_allocator() = default;
 
     pointer allocate(size_type n) {
-        return (pointer) (::operator new (sizeof(T) * n));
+        return static_cast<pointer>(::operator new(sizeof(T) * n));
     }
 
     void deallocate(pointer p, size_type n) noexcept {
@@ -40,47 +47,95 @@ public:
     }
 };
 
+template<typename K, typename T,
+        typename Hash = std::hash<K>,
+        typename Pred = std::equal_to<K>,
+        typename Alloc = My_allocator<std::pair<const K, T>>>
+class hash_map;
+
 template<typename ValueType>
 class hash_map_iterator {
 private:
-    ValueType* p;
+    ValueType *p;
+    int capacity = 0;
+    vector<status> status_;
+    int hash_index = 0;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
     using difference_type = std::ptrdiff_t;
-    using reference = ValueType&;
-    using pointer = ValueType*;
+    using reference = ValueType &;
+    using pointer = ValueType *;
 
-    hash_map_iterator(pointer p) noexcept : p(p){}
+    template<typename K, typename T,
+            typename Hash,
+            typename Pred,
+            typename Alloc>
+    friend
+    class hash_map;
 
-    hash_map_iterator(const hash_map_iterator& other) noexcept {
-        this->p=other.p;
+    hash_map_iterator() = default;
+
+    hash_map_iterator(pointer p, int capacity, vector<status> status_, int hash_index) :
+            p(p), capacity(capacity),
+            status_(status_),
+            hash_index(hash_index) {}
+
+    hash_map_iterator(const hash_map_iterator &other) noexcept {
+        this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status_ = other.status_;
     }
 
     reference operator*() const {
-        return *p;
+        return *(p + hash_index);
     }
+
     pointer operator->() const {
-        return p;
+        return p + hash_index;
     }
 
     // prefix ++
-    hash_map_iterator& operator++() {
-        ++p;
+    hash_map_iterator &operator++() {
+        for (int i = 0; i < capacity; ++i) {
+            if (status_[i] == FULL) {
+                hash_index = i;
+                return *this;
+            }
+        }
+        hash_index = capacity;
         return *this;
     }
+
     // postfix ++
     hash_map_iterator operator++(int) {
-        hash_map_iterator temp = *this;
-        p++;
-        return temp;
+        auto tmp = hash_map_iterator(*this);
+        operator++();
+        return tmp;
     }
 
-    bool operator==(const hash_map_iterator<ValueType>&other) {
-        return p==other.p;
+    hash_map_iterator next_free_space() {
+        int i = 0;
+        while (status_[hash_index] == FULL) {
+            ++hash_index;
+            hash_index %= capacity;
+            ++i;
+            if (i == capacity - 1) {
+                hash_index = capacity;
+                return *this;
+            }
+        }
+        hash_index = i;
+        return *this;
     }
-    bool operator!=(const hash_map_iterator<ValueType>&other) {
-        return p!=other.p;
+
+    friend bool operator==(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return (lhs.p + lhs.hash_index == rhs.p + rhs.hash_index);
+    }
+
+    friend bool operator!=(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return !(lhs == rhs);
     }
 };
 
@@ -88,84 +143,99 @@ template<typename ValueType>
 class hash_map_const_iterator {
 private:
     ValueType *p;
-// Shouldn't give non const references on value
+    int capacity = 0;
+    vector<status> status;
+    int hash_index = 0;
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = ValueType;
     using difference_type = std::ptrdiff_t;
-    using reference = const ValueType&;
-    using pointer = const ValueType*;
+    using reference = const ValueType &;
+    using pointer = const ValueType *;
+
+    template<typename K, typename T,
+            typename Hash,
+            typename Pred,
+            typename Alloc>
+    friend
+    class hash_map;
 
     hash_map_const_iterator() noexcept = default;
-    hash_map_const_iterator(const hash_map_const_iterator& other) noexcept = default;
-    hash_map_const_iterator(const hash_map_iterator<ValueType>& other) noexcept {};
+
+    hash_map_const_iterator(const hash_map_const_iterator &other) noexcept {
+        this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status = other.status;
+    }
+
+    hash_map_const_iterator(const hash_map_iterator<ValueType> &other) noexcept {
+        this->p = other.p;
+        this->capacity = other.capacity;
+        this->hash_index = other.hash_index;
+        this->status = other.status;
+    };
 
     const reference operator*() const {
-        return *p;
+        return *(p + hash_index);
     }
-    const pointer operator->() const{
-        return p;
+
+    const pointer operator->() const {
+        return (p + hash_index);
     }
 
     // prefix ++
-    hash_map_const_iterator& operator++(){
-        ++p;
+    hash_map_const_iterator &operator++() {
+        for (int i = 0; i < capacity; ++i) {
+            if (status[i] == FULL) {
+                hash_index = i;
+                return *this;
+            }
+        }
+        hash_index = capacity;
         return *this;
     }
+
     // postfix ++
-    hash_map_const_iterator operator++(int){
-        hash_map_const_iterator temp = *this;
-        p++;
-        return temp;
+    hash_map_const_iterator operator++(int) {
+        auto tmp = hash_map_const_iterator(*this);
+        operator++();
+        return tmp;
     }
 
-    bool operator==(const hash_map_iterator<ValueType>&other) {
-        return p==other.p;
+    friend bool operator==(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return lhs.p + lhs.hash_index == rhs.p + rhs.hash_index;
     }
-    bool operator!=(const hash_map_iterator<ValueType>&other) {
-        return p!=other.p;
+
+    friend bool operator!=(const hash_map_iterator<ValueType> &lhs, const hash_map_iterator<ValueType> &rhs) {
+        return !(lhs == rhs);
     }
 };
 
-template<typename K, typename V>
-class HashNode
-{
-    V value;
-    K key;
-    HashNode *next;
-public:
-    HashNode(K key, V value)
-    {
-        this->value = value;
-        this->key = key;
-        this->next = nullptr;
-    }
-};
 
-    template<typename K, typename T,
-	   typename Hash = std::hash<K>,
-	   typename Pred = std::equal_to<K>,
-	   typename Alloc = allocator<std::pair<const K, T>>>
-class hash_map
-{
+template<typename K, typename T, typename Hash, typename Pred, typename Alloc>
+class hash_map {
 private:
-    double loadfactor, max_loadfactor = 0.7;
-    int current_size,capacity;
-    HashNode<K,T> **arr;
-    HashNode<K,T> *deleted;
-public:
     using key_type = K;
     using mapped_type = T;
     using hasher = Hash;
     using key_equal = Pred;
     using allocator_type = Alloc;
     using value_type = std::pair<const key_type, mapped_type>;
-    using reference = value_type&;
-    using const_reference = const value_type&;
+    using reference = value_type &;
+    using const_reference = const value_type &;
     using iterator = hash_map_iterator<value_type>;
     using const_iterator = hash_map_const_iterator<value_type>;
     using size_type = std::size_t;
 
+    float loadfactor = 0, max_loadfactor = 0.5;
+    size_type current_size = 0, capacity = 0;
+    value_type *arr;
+    vector<status> status_ptr;
+    allocator_type allocator_;
+    hasher hasher_;
+    key_equal equal_;
+public:
     /// Default constructor.
     hash_map() = default;
 
@@ -173,491 +243,370 @@ public:
      *  @brief  Default constructor creates no elements.
      *  @param n  Minimal initial number of buckets.
      */
-    explicit hash_map(size_type n) {
+    explicit hash_map(size_type n) : status_ptr(n, EMPTY) {
         capacity = n;
-        allocator<T> allocator;
-        arr = allocator.allocate(n);
-        for(int i=0 ; i < capacity ; i++)
-            arr[i] = NULL;
-        deleted = allocator.allocate(1)(-1,-1);
+        if (n != 0) {
+            arr = allocator_.allocate(n);
+        }
     }
 
-    /**
-     *  @brief  Builds an %hash_map from a range.
-     *  @param  first  An input iterator.
-     *  @param  last  An input iterator.
-     *  @param  n  Minimal initial number of buckets.
-     *
-     *  Create an %hash_map consisting of copies of the elements from
-     *  [first,last).  This is linear in N (where N is
-     *  distance(first,last)).
-     */
+    ~hash_map() {
+        for (int i = 0; i < capacity; ++i) {
+            if (status_ptr[i] == FULL)
+                arr[i].~value_type();
+        }
+        allocator_.deallocate(arr, capacity);
+    }
+
     template<typename InputIterator>
-    hash_map(InputIterator first, InputIterator last,size_type n = 0);
+    hash_map(InputIterator first, InputIterator last, size_type n = 0) : hash_map(n) {
+        for (auto it = first; it != last; ++it) {
+            insert(it->first, it->second);
+        }
+
+    }
+
 
     /// Copy constructor.
-    hash_map(const hash_map &other) {
-        this->arr = other.arr;
+    hash_map(const hash_map &other) : hash_map(other.capacity) {
+        for (auto it = other.begin(); it != other.end(); ++it) {
+            insert(*it);
+        }
     }
 
     /// Move constructor.
-    hash_map(hash_map&&);
+    hash_map(hash_map &&other) noexcept {
+        swap(other);
+    }
 
-    /**
-     *  @brief Creates an %hash_map with no elements.
-     *  @param a An allocator object.
-     */
-    explicit hash_map(const allocator_type& a);
+    explicit hash_map(const allocator_type &a) {
+        allocator_ = a;
+    }
 
-    /*
-    *  @brief Copy constructor with allocator argument.
-    * @param  uset  Input %hash_map to copy.
-    * @param  a  An allocator object.
-    */
-    hash_map(const hash_map& umap,
-        const allocator_type& a);
-
-    /*
-    *  @brief  Move constructor with allocator argument.
-    *  @param  uset Input %hash_map to move.
-    *  @param  a    An allocator object.
-    */
-    hash_map(hash_map&& umap,
-        const allocator_type& a);
-
-    /**
-     *  @brief  Builds an %hash_map from an initializer_list.
-     *  @param  l  An initializer_list.
-     *  @param n  Minimal initial number of buckets.
-     *
-     *  Create an %hash_map consisting of copies of the elements in the
-     *  list. This is linear in N (where N is @a l.size()).
-     */
-    hash_map(std::initializer_list<value_type> l,
-        size_type n = 0);
+    hash_map(std::initializer_list<value_type> l, size_type n = 0) : hash_map(n) {
+        for (auto it = l.begin(); it != l.end(); ++it) {
+            insert(it->first, it->second);
+        }
+    }
 
     /// Copy assignment operator.
-    hash_map& operator=(const hash_map&);
+    hash_map &operator=(const hash_map &other) {
+        hash_map(other).swap(*this);
+        return *this;
+    }
 
     /// Move assignment operator.
-    hash_map& operator=(hash_map&&);
+    hash_map &operator=(hash_map &&other) noexcept {
+        swap(other);
+        return *this;
+    }
 
-    /**
-     *  @brief  %hash_map list assignment operator.
-     *  @param  l  An initializer_list.
-     *
-     *  This function fills an %hash_map with copies of the elements in
-     *  the initializer list @a l.
-     *
-     *  Note that the assignment completely changes the %hash_map and
-     *  that the resulting %hash_map's size is the same as the number
-     *  of elements assigned.
-     */
-    hash_map& operator=(std::initializer_list<value_type> l);
+    hash_map &operator=(std::initializer_list<value_type> l) {
+        for (auto it = l.begin(); it != l.end(); ++it) {
+            insert(*it);
+        }
+    }
 
-    ///  Returns the allocator object used by the %hash_map.
-    allocator_type get_allocator() const noexcept;
+    allocator_type get_allocator() const noexcept {
+        return allocator_;
+    }
 
-    // size and capacity:
+    bool empty() const noexcept {
+        return current_size == 0;
+    }
 
-    ///  Returns true if the %hash_map is empty.
-    bool empty() const noexcept;
-
-    ///  Returns the size of the %hash_map.
     size_type size() const noexcept {
         return current_size;
     }
 
-    ///  Returns the maximum size of the %hash_map.
     size_type max_size() const noexcept {
-        return capacity;
+        return std::numeric_limits<size_type>::max();
     }
 
-    // iterators.
+    void swap(hash_map &x) {
+        std::swap(arr, x.arr);
+        std::swap(allocator_, x.allocator_);
+        std::swap(capacity, x.capacity);
+        std::swap(loadfactor, x.loadfactor);
+        std::swap(max_loadfactor, x.max_loadfactor);
+        std::swap(hasher_, x.hasher_);
+        std::swap(status_ptr, x.status_ptr);
+        std::swap(current_size, x.current_size);
+        std::swap(equal_, x.equal_);
+    }
 
-    /**
-     *  Returns a read/write iterator that points to the first element in the
-     *  %hash_map.
-     */
     iterator begin() noexcept {
-        return arr;
+        iterator it;
+        it.capacity = capacity;
+        it.status_ = status_ptr;
+        it.p = arr;
+        if (status_ptr[0] != FULL) {
+            it.operator++();
+            return it;
+        } else {
+            it.hash_index = 0;
+            return it;
+        }
     }
 
-    //@{
-    /**
-     *  Returns a read-only (constant) iterator that points to the first
-     *  element in the %hash_map.
-     */
     const_iterator begin() const noexcept {
         return cbegin();
     }
 
     const_iterator cbegin() const noexcept {
-        const_iterator iter = arr;
-        return iter;
+        const_iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        if (status_ptr[0] != FULL) {
+            it.operator++();
+            return it;
+        } else {
+            it.hash_index = 0;
+            return it;
+        }
+    }
+    float load_factor(){
+        return static_cast<float>(current_size/capacity);
     }
 
-    /**
-     *  Returns a read/write iterator that points one past the last element in
-     *  the %hash_map.
-     */
+
+
     iterator end() noexcept {
-        return arr+capacity;
+        iterator it;
+        it.capacity = capacity;
+        it.status_ = status_ptr;
+        it.p = arr;
+        it.hash_index = capacity;
+        return it;
     }
 
-    //@{
-    /**
-     *  Returns a read-only (constant) iterator that points one past the last
-     *  element in the %hash_map.
-     */
     const_iterator end() const noexcept {
         return cend();
     }
 
     const_iterator cend() const noexcept {
-        const_iterator iter = arr;
-        return iter + capacity;
+        const_iterator it;
+        it.capacity = capacity;
+        it.status = status_ptr;
+        it.p = arr;
+        it.hash_index = capacity;
+        return it;
     }
-    //@}
-
-    // modifiers.
-
-    /**
-     *  @brief Attempts to build and insert a std::pair into the
-     *  %hash_map.
-     *
-     *  @param args  Arguments used to generate a new pair instance (see
-     *	        std::piecewise_contruct for passing arguments to each
-    *	        part of the pair constructor).
-    *
-    *  @return  A pair, of which the first element is an iterator that points
-    *           to the possibly inserted pair, and the second is a bool that
-    *           is true if the pair was actually inserted.
-    *
-    *  This function attempts to build and insert a (key, value) %pair into
-    *  the %hash_map.
-    *  An %hash_map relies on unique keys and thus a %pair is only
-    *  inserted if its first element (the key) is not already present in the
-    *  %hash_map.
-    *
-    *  Insertion requires amortized constant time.
-    */
-    template<typename... _Args>
-    std::pair<iterator, bool> emplace(_Args&&... args);
-
-    /**
-     *  @brief Attempts to build and insert a std::pair into the
-     *  %hash_map.
-     *
-     *  @param k    Key to use for finding a possibly existing pair in
-     *                the hash_map.
-     *  @param args  Arguments used to generate the .second for a
-     *                new pair instance.
-     *
-     *  @return  A pair, of which the first element is an iterator that points
-     *           to the possibly inserted pair, and the second is a bool that
-     *           is true if the pair was actually inserted.
-     *
-     *  This function attempts to build and insert a (key, value) %pair into
-     *  the %hash_map.
-     *  An %hash_map relies on unique keys and thus a %pair is only
-     *  inserted if its first element (the key) is not already present in the
-     *  %hash_map.
-     *  If a %pair is not inserted, this function has no effect.
-     *
-     *  Insertion requires amortized constant time.
-     */
-    template <typename... _Args>
-    std::pair<iterator, bool> try_emplace(const key_type& k, _Args&&... args);
-
-    // move-capable overload
-    template <typename... _Args>
-    std::pair<iterator, bool> try_emplace(key_type&& k, _Args&&... args);
-
-    //@{
-    /**
-     *  @brief Attempts to insert a std::pair into the %hash_map.
-     *  @param x Pair to be inserted (see std::make_pair for easy
-     *	     creation of pairs).
-    *
-    *  @return  A pair, of which the first element is an iterator that
-    *           points to the possibly inserted pair, and the second is
-    *           a bool that is true if the pair was actually inserted.
-    *
-    *  This function attempts to insert a (key, value) %pair into the
-    *  %hash_map. An %hash_map relies on unique keys and thus a
-    *  %pair is only inserted if its first element (the key) is not already
-    *  present in the %hash_map.
-    *
-    *  Insertion requires amortized constant time.
-    */
-    std::pair<iterator, bool> insert(const value_type& x);
-
-    std::pair<iterator, bool> insert(value_type&& x);
-
-    //@}
-
-    /**
-     *  @brief A template function that attempts to insert a range of
-     *  elements.
-     *  @param  first  Iterator pointing to the start of the range to be
-     *                   inserted.
-     *  @param  last  Iterator pointing to the end of the range.
-     *
-     *  Complexity similar to that of the range constructor.
-     */
-    template<typename _InputIterator>
-    void insert(_InputIterator first, _InputIterator last);
-
-    /**
-     *  @brief Attempts to insert a list of elements into the %hash_map.
-     *  @param  l  A std::initializer_list<value_type> of elements
-     *               to be inserted.
-     *
-     *  Complexity similar to that of the range constructor.
-     */
-    void insert(std::initializer_list<value_type> l);
-
-
-    /**
-     *  @brief Attempts to insert a std::pair into the %hash_map.
-     *  @param k    Key to use for finding a possibly existing pair in
-     *                the map.
-     *  @param obj  Argument used to generate the .second for a pair
-     *                instance.
-     *
-     *  @return  A pair, of which the first element is an iterator that
-     *           points to the possibly inserted pair, and the second is
-     *           a bool that is true if the pair was actually inserted.
-     *
-     *  This function attempts to insert a (key, value) %pair into the
-     *  %hash_map. An %hash_map relies on unique keys and thus a
-     *  %pair is only inserted if its first element (the key) is not already
-     *  present in the %hash_map.
-     *  If the %pair was already in the %hash_map, the .second of
-     *  the %pair is assigned from obj.
-     *
-     *  Insertion requires amortized constant time.
-     */
-    template <typename _Obj>
-    std::pair<iterator, bool> insert_or_assign(const key_type& k, _Obj&& obj);
-
-    // move-capable overload
-    template <typename _Obj>
-    std::pair<iterator, bool> insert_or_assign(key_type&& k, _Obj&& obj);
-
-    //@{
-    /**
-     *  @brief Erases an element from an %hash_map.
-     *  @param  position  An iterator pointing to the element to be erased.
-     *  @return An iterator pointing to the element immediately following
-     *          @a position prior to the element being erased. If no such
-     *          element exists, end() is returned.
-     *
-     *  This function erases an element, pointed to by the given iterator,
-     *  from an %hash_map.
-     *  Note that this function only erases the element, and that if the
-     *  element is itself a pointer, the pointed-to memory is not touched in
-     *  any way.  Managing the pointer is the user's responsibility.
-     */
-    iterator erase(const_iterator position);
-
-    // LWG 2059.
-    iterator erase(iterator position);
-    //@}
-
-    /**
-     *  @brief Erases elements according to the provided key.
-     *  @param  x  Key of element to be erased.
-     *  @return  The number of elements erased.
-     *
-     *  This function erases all the elements located by the given key from
-     *  an %hash_map. For an %hash_map the result of this function
-     *  can only be 0 (not present) or 1 (present).
-     *  Note that this function only erases the element, and that if the
-     *  element is itself a pointer, the pointed-to memory is not touched in
-     *  any way.  Managing the pointer is the user's responsibility.
-     */
-    size_type erase(const key_type& x);
-
-    /**
-     *  @brief Erases a [first,last) range of elements from an
-     *  %hash_map.
-     *  @param  first  Iterator pointing to the start of the range to be
-     *                  erased.
-     *  @param last  Iterator pointing to the end of the range to
-     *                be erased.
-     *  @return The iterator @a last.
-     *
-     *  This function erases a sequence of elements from an %hash_map.
-     *  Note that this function only erases the elements, and that if
-     *  the element is itself a pointer, the pointed-to memory is not touched
-     *  in any way.  Managing the pointer is the user's responsibility.
-     */
-    iterator erase(const_iterator first, const_iterator last);
-
-    /**
-     *  Erases all elements in an %hash_map.
-     *  Note that this function only erases the elements, and that if the
-     *  elements themselves are pointers, the pointed-to memory is not touched
-     *  in any way.  Managing the pointer is the user's responsibility.
-     */
-    void clear() noexcept;
-
-    /**
-     *  @brief  Swaps data with another %hash_map.
-     *  @param  x  An %hash_map of the same element and allocator
-     *  types.
-     *
-     *  This exchanges the elements between two %hash_map in constant
-     *  time.
-     *  Note that the global std::swap() function is specialized such that
-     *  std::swap(m1,m2) will feed to this function.
-     */
-    void swap(hash_map& x);
-
-    template<typename _H2, typename _P2>
-    void merge(hash_map<K, T, _H2, _P2, Alloc>& source);
-
-    template<typename _H2, typename _P2>
-    void merge(hash_map<K, T, _H2, _P2, Alloc>&& source);
-
-    // observers.
-
-    ///  Returns the hash functor object with which the %hash_map was
-    ///  constructed.
-    Hash hash_function(const char *key) const {
-        size_t hash_value = Hash(key);
-        return hash_value;
-    }
-
-    ///  Returns the key comparison object with which the %hash_map was
-    ///  constructed.
-    Pred key_eq() const;
-
-    // lookup.
-
-    //@{
-    /**
-     *  @brief Tries to locate an element in an %hash_map.
-     *  @param  x  Key to be located.
-     *  @return  Iterator pointing to sought-after element, or end() if not
-     *           found.
-     *
-     *  This function takes a key and tries to locate the element with which
-     *  the key matches.  If successful the function returns an iterator
-     *  pointing to the sought after element.  If unsuccessful it returns the
-     *  past-the-end ( @c end() ) iterator.
-     */
-    iterator find(const key_type& x);
-
-    const_iterator find(const key_type& x) const;
-    //@}
-
-    /**
-     *  @brief  Finds the number of elements.
-     *  @param  x  Key to count.
-     *  @return  Number of elements with specified key.
-     *
-     *  This function only makes sense for %unordered_multimap; for
-     *  %hash_map the result will either be 0 (not present) or 1
-     *  (present).
-     */
-    size_type count(const key_type& x) const;
-
-    /**
-     *  @brief  Finds whether an element with the given key exists.
-     *  @param  x  Key of elements to be located.
-     *  @return  True if there is any element with the specified key.
-     */
-    bool contains(const key_type& x) const;
-
-    //@{
-    /**
-     *  @brief  Subscript ( @c [] ) access to %hash_map data.
-     *  @param  k  The key for which data should be retrieved.
-     *  @return  A reference to the data of the (key,data) %pair.
-     *
-     *  Allows for easy lookup with the subscript ( @c [] )operator.  Returns
-     *  data associated with the key specified in subscript.  If the key does
-     *  not exist, a pair with that key is created using default values, which
-     *  is then returned.
-     *
-     *  Lookup requires constant time.
-     */
-    mapped_type& operator[](const key_type& k);
-
-    mapped_type& operator[](key_type&& k);
-    //@}
-
-    //@{
-    /**
-     *  @brief  Access to %hash_map data.
-     *  @param  k  The key for which data should be retrieved.
-     *  @return  A reference to the data whose key is equal to @a k, if
-     *           such a data is present in the %hash_map.
-     *  @throw  std::out_of_range  If no such data is present.
-     */
-    mapped_type& at(const key_type& k);
-
-    const mapped_type& at(const key_type& k) const;
-    //@}
-
-    // bucket interface.
-
-    /// Returns the number of buckets of the %hash_map.
     size_type bucket_count() const noexcept {
         return capacity;
     }
 
-    /*
-    * @brief  Returns the bucket index of a given element.
-    * @param  _K  A key instance.
-    * @return  The key bucket index.
-    */
-    size_type bucket(const key_type& _K) const;
+    std::pair<iterator, bool> insert(K key, T value) {
+        if (capacity == 0) {
+            rehash(3);
+        }
+        if (loadfactor >= max_loadfactor) {
+            rehash(capacity * 2);
+        }
 
-    // hash policy.
+        bool state;
+        int hash_index = hasher_(key) % capacity;
+        if (status_ptr[hash_index] == EMPTY) {
+            state = true;
+            current_size++;
+            loadfactor = static_cast<float>(current_size) / capacity;
+            status_ptr[hash_index] = FULL;
+            new(arr + hash_index) value_type(key, value);
+            return pair<iterator, bool>(hash_map_iterator<value_type>(arr, capacity, status_ptr, hash_index), state);
+        }
+        iterator find_ = find(key);
+        if (find_ != end()) {
+            state = false;
+            return pair<iterator, bool>(find_, state);
+        } else{
+            iterator it(arr, capacity, status_ptr, hash_index=find_.hash_index);
+            it = it.next_free_space();
+            state = true;
+            current_size++;
+            loadfactor = static_cast<float>(current_size) / capacity;
+            status_ptr[it.hash_index] = FULL;
+            new(arr + it.hash_index) value_type(key, value);
+            return pair<iterator, bool>(iterator(arr, capacity, status_ptr, hash_index), state);
+        }
 
-    /// Returns the average number of elements per bucket.
-    float load_factor() const noexcept {
-        return current_size/capacity;
     }
 
-    /// Returns a positive number that the %hash_map tries to keep the
-    /// load factor less than or equal to.
-    float max_load_factor() const noexcept {
-        return max_loadfactor;
+    void erase(K key) {
+        iterator it = find(key);
+        if (it == end()) {
+            cout << "There is no such element in the map" << endl;
+            return;
+        } else {
+            (arr + it.hash_index)->~value_type();
+            current_size--;
+            loadfactor = static_cast<float>(current_size) / capacity;
+            status_ptr[it.hash_index] = DELETED;
+        }
     }
 
-    /**
-     *  @brief  Change the %hash_map maximum load factor.
-     *  @param  z The new maximum load factor.
-     */
-    void max_load_factor(float z) {
-        max_loadfactor = z;
-        return; max_loadfactor;
+    void clear() noexcept {
+        for (int i = 0; i < capacity; ++i) {
+            if (status_ptr[i] == FULL)
+                arr[i].~value_type();
+        }
     }
 
-    /**
-     *  @brief  May rehash the %hash_map.
-     *  @param  n The new number of buckets.
-     *
-     *  Rehash will occur only if the new number of buckets respect the
-     *  %hash_map maximum load factor.
-     */
-    void rehash(size_type n);
+    Hash hash_function() const {
+        return hasher_;
+    }
 
-    /**
-     *  @brief  Prepare the %hash_map for a specified number of
-     *          elements.
-     *  @param  n Number of elements required.
-     *
-     *  Same as rehash(ceil(n / max_load_factor())).
-     */
-    void reserve(size_type n);
+    Pred key_eq() const {
+        return equal_;
+    }
 
-    bool operator==(const hash_map& other) const;
+    iterator find(K key) {
+        int hash_index = hasher_(key) % capacity;
+        if (status_ptr[hash_index] == FULL and arr[hash_index].first == key)
+            return iterator(arr, capacity, status_ptr, hash_index);
+        else {
+            int i = 0;
+            while (status_ptr[hash_index] != FULL or arr[hash_index].first != key) {
+                if (status_ptr[hash_index] == EMPTY)
+                    return end();
+                ++hash_index;
+                hash_index %= capacity;
+                if (i == capacity - 1) {
+                    return end();
+                }
+                ++i;
+            }
+            return iterator(arr, capacity, status_ptr, hash_index);
+        }
+    }
+
+    void rehash(size_type n) {
+        if (n < capacity)
+            return;
+        hash_map temp(begin(), end(), n);
+        swap(temp);
+    }
+
+    template<typename _H2, typename _P2>
+    void merge(hash_map<K, T, _H2, _P2, Alloc>& source) {
+        for (int i = 0; i<source.capacity; ++i){
+            if (source.status_ptr[i] == FULL)
+                insert(source.arr[i]);
+        }
+    }
+
+    template<typename _H2, typename _P2>
+    void merge(hash_map<K, T, _H2, _P2, Alloc>&& source) {
+        for (int i = 0; i<source.capacity; ++i){
+            if (source.status_ptr[i] == FULL)
+                insert(source.arr[i]);
+        }
+    }
+
+
+    mapped_type& operator[](const key_type& k) {
+        auto res =insert(k, mapped_type ());
+        return res.first->second;
+    }
+
+    mapped_type& operator[](key_type&& k) {
+        auto res =insert(move(k), mapped_type ());
+        return res.first->second;
+    }
+
+    mapped_type& at(const key_type& k){
+        iterator iter = find(k);
+        if(iter == end()) {
+            throw std::out_of_range("item not found");
+        }
+        return (iter->second);
+    }
+
+
+    const mapped_type& at(const key_type& k) const{
+        const_iterator iter = find(k);
+        if(iter == end()) {
+            throw std::out_of_range("item not found");
+        }
+        return (iter->second);
+    }
+
+    void reserve(size_type n) {
+        rehash(ceil(n / max_loadfactor));
+    }
+
 };
 
-} // namespace fefu
+///////////////////////////////////////////
+
+#define CATCH_CONFIG_MAIN  // This tells Catch to provide a main() - only do this in one cpp file
+#include "catch.hpp"
+
+TEST_CASE("LAB2") {
+SECTION("") {
+allocator<int> alloc;
+int *place = alloc.allocate(15);
+REQUIRE(*place == 15);
+}
+SECTION("") {
+allocator<int> alloc;
+int *data = alloc.allocate(50);
+alloc.deallocate(data, 50);
+}
+SECTION("") {
+hash_map<int, int>
+        table({{21, 1},
+               {0, 23},
+               {2, 3},
+               {-1, 11},
+               {-12, 11},
+               {21, 1}});
+hash_map<int, int> other_table(table.get_allocator());
+// table.insert(std::make_pair(7, 1));
+// table.insert(std::make_pair(2, 2));
+// table.insert(std::make_pair(3, 3));
+}
+
+SECTION("") {
+hash_map<std::string, int> table(7);
+REQUIRE(table.bucket_count() == 7);
+REQUIRE(table.size() == 0);
+REQUIRE(table.empty());
+}
+SECTION("") {
+hash_map<std::string, int> table;
+REQUIRE(table.bucket_count() == 0);
+REQUIRE(table.size() == 0);
+REQUIRE(table.empty());
+REQUIRE(table.load_factor() == 0);
+}
+SECTION("") {
+hash_map<std::string, int> table(2);
+std::pair<std::string, int> element{"yes", 1};
+// table.insert(element);
+// REQUIRE(table.begin()->first == "yes");
+// REQUIRE(table.begin()->second == 1);
+}
+SECTION("") {
+std::vector<std::pair<std::string, int>> elements(9);
+elements[0] = {"death", 1};
+elements[1] = {"rest", 2};
+elements[2] = {"in", 3};
+elements[3] = {"peace", 4};
+elements[4] = {"help", 5};
+// fefu::hash_map<std::string, int> table(elements.begin(), elements.end());
+// std::cout « table.contains("death");
+}
+//SECTION("") {
+//hash_map<std::string, int> table
+//        ({{"death", 1}, {"rest", 23}, {"help", 3}, {"my", 11}, {"give", 11}});
+//REQUIRE(table.cbegin() == table.cend());
+//}
+SECTION("") {
+hash_map<int, int> table(10);
+table[6] = -120;
+table[2] = 12;
+REQUIRE(table[6] == -120);
+REQUIRE(table[2] == 12);
+}
+}
