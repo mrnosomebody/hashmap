@@ -441,6 +441,13 @@ public:
         }
 
     }
+    
+    void clear() noexcept {
+        for (int i = 0; i < capacity; ++i) {
+            if (status_ptr[i] == FULL)
+                arr[i].~value_type();
+        }
+    }
 
     iterator find(K key) {
         int hash_index = hasher_(key) % capacity;
